@@ -300,12 +300,13 @@ function lutFromImage(img){var W=img.naturalWidth||img.width,H=img.naturalHeight
  var cv=document.createElement('canvas');cv.width=W;cv.height=H;var x=cv.getContext('2d',{willReadFrequently:true});x.drawImage(img,0,0);var id=x.getImageData(0,0,W,H).data;var N=L*L;var d=new Float32Array(N*N*N*3);
  for(var i=0;i<N*N*N;i++){var px=(i%W),py=Math.floor(i/W),o=(py*W+px)*4;d[i*3]=id[o]/255;d[i*3+1]=id[o+1]/255;d[i*3+2]=id[o+2]/255;}
  return {N:N,data:d,dmin:[0,0,0],dmax:[1,1,1]};}
-function uploadLut(L){
+var lutUp=null;
+function uploadLut(L){var orig=L;
  if(L.N*L.N>MAXTEX){var f=lutFromFn(function(r,g,b){return lutApply(L,r,g,b);},33);f.dmin=L.dmin;f.dmax=L.dmax;L=f;}
  var N=L.N,W=N*N,H=N,buf=new Uint8Array(W*H*4);
  for(var b=0;b<N;b++)for(var g=0;g<N;g++)for(var r=0;r<N;r++){var i=(r+g*N+b*N*N)*3,o=(g*W+b*N+r)*4;buf[o]=clamp(Math.round(L.data[i]*255),0,255);buf[o+1]=clamp(Math.round(L.data[i+1]*255),0,255);buf[o+2]=clamp(Math.round(L.data[i+2]*255),0,255);buf[o+3]=255;}
  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,false);bind(1,lutTex);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,W,H,0,gl.RGBA,gl.UNSIGNED_BYTE,buf);
- L.gpuN=N;L.gpuDmin=L.dmin;L.gpuDmax=L.dmax;}
+ lutUp={src:orig,N:N,dmin:L.dmin,dmax:L.dmax};}
 
 /* preset LUT procedurali */
 function L709(r,g,b){return 0.2126*r+0.7152*g+0.0722*b;}
@@ -346,9 +347,10 @@ function wheelVec(w,cs,ls){var r=Math.min(1,Math.hypot(w.x,w.y));var h=((Math.at
 function hsv(h,s,v){var i=Math.floor(h*6),f=h*6-i,p=v*(1-s),q=v*(1-f*s),t=v*(1-(1-f)*s);switch(i%6){case 0:return [v,t,p];case 1:return [q,v,p];case 2:return [p,v,t];case 3:return [p,q,v];case 4:return [t,p,v];default:return [v,p,q];}}
 function mainUniforms(bake,bakeN){
  var mixArr=new Float32Array(32);for(var i=0;i<8;i++){mixArr[i*4]=MIXC[i];mixArr[i*4+1]=MIX[i].h;mixArr[i*4+2]=MIX[i].s;mixArr[i*4+3]=MIX[i].l;}
- var L=curLut&&curLut.gpuN?curLut:null;
+ if(curLut&&(!lutUp||lutUp.src!==curLut))uploadLut(curLut);
+ var L=curLut?lutUp:null;
  var o={uAspect:cw/ch,uBake:bake?1:0,uBakeN:bakeN||33,uCST:P.cst,uExpIn:P.expIn,uTone:P.tone,
-  uLutOn:L?1:0,uLutN:L?L.gpuN:2,uLutAmt:P.lutAmt,uDmin:L?L.gpuDmin:[0,0,0],uDmax:L?L.gpuDmax:[1,1,1],
+  uLutOn:L?1:0,uLutN:L?L.N:2,uLutAmt:P.lutAmt,uDmin:L?L.dmin:[0,0,0],uDmax:L?L.dmax:[1,1,1],
   uCA:P.ca,uDist:P.dist*0.6,uWeave:weave,
   uExp:P.exposure,uCon:P.contrast,uHi:P.highlights,uSh:P.shadows,uWh:P.whites,uBl:P.blacks,uTemp:P.temp,uTint:P.tint,uSat:P.sat,uVib:P.vib,
   uLift:wheelVec(WH.lift,0.3,0.3),uGamma:wheelVec(WH.gamma,0.5,0.6),uGain:wheelVec(WH.gain,0.5,0.5),uOff:wheelVec(WH.offset,0.1,0.1),
@@ -485,7 +487,7 @@ var hist=[],hpos=-1,restoring=false;
 function snapshot(){return JSON.stringify({P:P,WH:WH,MIX:MIX,CUR:CUR,lut:curLut?curLut.id:null});}
 function pushHist(){if(restoring)return;var s=snapshot();if(hist[hpos]===s)return;hist=hist.slice(0,hpos+1);hist.push(s);if(hist.length>60)hist.shift();hpos=hist.length-1;}
 function applySnap(s){restoring=true;var o=JSON.parse(s);P=o.P;WH=o.WH;MIX=o.MIX;CUR=o.CUR;curLut=null;if(o.lut){for(var i=0;i<luts.length;i++)if(luts[i].id===o.lut)curLut=luts[i];}
- if(curLut&&!curLut.gpuN)uploadLut(curLut);uploadCurves();refreshUI();restoring=false;dirty=true;}
+ uploadCurves();refreshUI();restoring=false;dirty=true;}
 $('#btnUndo').onclick=function(){if(hpos>0){hpos--;applySnap(hist[hpos]);}};
 $('#btnRedo').onclick=function(){if(hpos<hist.length-1){hpos++;applySnap(hist[hpos]);}};
 $('#btnReset').onclick=function(){if(!confirm('Azzerare tutte le regolazioni?'))return;resetAll();pushHist();};
@@ -533,7 +535,7 @@ var camSel;
  section(pLut,'I miei look');var lk=el('div','chips');pLut.appendChild(lk);window.__looks=lk;
 })();
 function addLutChip(L,sel){var c=el('button','chip');c.appendChild(swatch(L));c.appendChild(el('span','',L?L.name:'Nessuna'));c.onclick=function(){setLut(L);};c._L=L;lutChips.appendChild(c);return c;}
-function setLut(L){curLut=L;if(L&&!L.gpuN)uploadLut(L);dirty=true;refreshLutChips();pushHist();}
+function setLut(L){curLut=L;dirty=true;refreshLutChips();pushHist();}
 function refreshLutChips(){[].forEach.call(lutChips.children,function(c){c.classList.toggle('on',c._L===curLut||(!c._L&&!curLut));});}
 refreshers.push(refreshLutChips);
 addLutChip(null);
@@ -694,7 +696,7 @@ function batch(files){
  var i=0;(function next(){if(i>=files.length){msg('Batch completato');return;}var f=files[i++];msg('Batch '+i+'/'+files.length+': '+f.name,0);
   loadFile(f).then(function(){var isV=src.type==='video';return (isV?exportVideo():exportStill());}).then(function(){setTimeout(next,400);}).catch(function(e){msg('Errore su '+f.name+': '+e.message,3500);setTimeout(next,1500);});})();}
 function lookData(){return {v:1,P:P,WH:WH,MIX:MIX,CUR:CUR,lut:(curLut&&curLut.id&&curLut.id.indexOf('imp')!==0)?curLut.id:null};}
-function applyLook(o){P=Object.assign(JSON.parse(JSON.stringify(DEF)),o.P);WH=o.WH;MIX=o.MIX;CUR=o.CUR;curLut=null;if(o.lut){for(var i=0;i<luts.length;i++)if(luts[i].id===o.lut)curLut=luts[i];}if(curLut&&!curLut.gpuN)uploadLut(curLut);uploadCurves();refreshUI();dirty=true;pushHist();}
+function applyLook(o){P=Object.assign(JSON.parse(JSON.stringify(DEF)),o.P);WH=o.WH;MIX=o.MIX;CUR=o.CUR;curLut=null;if(o.lut){for(var i=0;i<luts.length;i++)if(luts[i].id===o.lut)curLut=luts[i];}uploadCurves();refreshUI();dirty=true;pushHist();}
 function savedLooks(){try{return JSON.parse(localStorage.getItem('grado_looks')||'[]')}catch(e){return []}}
 function saveLook(){var n=prompt('Nome del look?');if(!n)return;var a=savedLooks();a.push({name:n,data:lookData()});try{localStorage.setItem('grado_looks',JSON.stringify(a));}catch(e){msg('Impossibile salvare');return;}renderLooks();msg('Look salvato');}
 function renderLooks(){var c=window.__looks;c.innerHTML='';var a=savedLooks();if(!a.length){c.appendChild(el('div','note','Nessun look salvato. Usa Esporta → Salva look.'));return;}
